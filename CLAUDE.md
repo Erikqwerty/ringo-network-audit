@@ -1,0 +1,37 @@
+# Заметки для доработки
+
+Карта: `README.md` → «Структура». Правьте узкий файл, а не читайте всё подряд:
+
+| Задача | Файл |
+|---|---|
+| новый эндпоинт Ringo | `modules/ringo/lib/endpoints.sh` (маршруты устройств из swagger добавляются сами) |
+| логика вердикта эндпоинта | `modules/ringo/checks/20_endpoints.sh` |
+| HTTP-проба, разбор ответа NestJS | `modules/ringo/lib/http.sh` |
+| TLS, цепочка, сертификат | `modules/ringo/lib/tls.sh`, вывод — `checks/10_tls.sh` |
+| версия Ringo, swagger, снимки схем | `modules/ringo/lib/api.sh` |
+| что значит ответ приложения | `schemas/known_responses.tsv` (данные), `resp_explain` в `lib/api.sh` |
+| хосты Apple | `modules/apple/lib/targets.sh` |
+| вид отчёта | `report/style.css`, `report/app.js`; разбор строк — `render_module` в `report/build.sh` |
+| окно «Подробнее» | данные — `lib/detail.sh` (+ `det_probe` в `modules/ringo/lib/http.sh`), окно — `report/app.js` |
+| флаги мастера, `--full` | `audit.sh`, запуск модулей — `lib/runner.sh` |
+
+## Соглашения
+
+- bash 3.2 (macOS): без ассоциативных массивов, `${x,,}`, `mapfile`; `local -a` можно.
+- Переменная перед кириллицей или `»` — только в фигурных скобках: `"${VAR}»"`. Иначе bash 3.2
+  склеивает байты UTF-8 с именем → `unbound variable`.
+- `checks/*.sh` подключаются через `source` по порядку и делят глобальные переменные модуля.
+  `count` нельзя вызывать внутри `$(…)` — счётчик останется в подоболочке.
+- Каждый WARN/FAIL — с подписью: `count WARN "что не так"` (попадает в «Итог: что требует внимания»).
+- У каждой строки проверки — подробности: `det_new "заголовок"` → `det_cmd`/`det_kv`/`det_file`
+  (для HTTP — `det_probe` сразу после пробы, пока `$TMP` не перезаписан) → `printf` строки → `det_ref`.
+  `det_ref` — строго после строки проверки, иначе подробности уйдут к соседней.
+- Формат строк вывода — контракт с отчётом (см. шапку `lib/ui.sh`). Изменили формат — проверьте
+  `render_module` и `tests/run.sh`.
+- Комментарии и вывод — на русском, коротко, объясняют «почему».
+
+## Проверка изменений
+
+1. `./tests/run.sh` — синтаксис и юнит-тесты, без сети.
+2. Живой прогон: `modules/ringo/run.sh https://<сервер> --scep-proxy` (и `--internal` для закрытого сервера).
+3. Отчёт: `./audit.sh --rebuild results/<папка>` и открыть `report.html`.

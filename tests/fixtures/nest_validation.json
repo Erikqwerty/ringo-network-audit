@@ -1,0 +1,1 @@
+{"message":["Request_type must be one of the following values: Authenticate, CheckOut"],"error":"Bad Request","statusCode":400}

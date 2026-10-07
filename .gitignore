@@ -1,0 +1,22 @@
+# результаты аудитов: адреса, сертификаты, ответы и трафик серверов клиентов — не в репозиторий
+results/*
+!results/.gitkeep
+network_audit_*/
+*.pcap
+*.pcapng
+
+# снимки swagger Ringo — не публикуем; копятся сами с серверов (known_responses.tsv — в репозитории)
+schemas/swagger_*.json
+
+# ключи и секреты — на случай, если окажутся рядом со скриптами
+*.pem
+*.key
+*.p12
+.env
+
+.DS_Store
+*.swp
+*~
+
+# личные настройки Claude Code (разрешения и т. п.)
+.claude/settings.local.json
