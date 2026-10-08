@@ -17,6 +17,9 @@ echo "  проверено файлов: $PASS"
 # bash 3.2 склеивает байты UTF-8 с именем переменной, если «»/кириллица идут вплотную к ней → unbound variable.
 bad_vars=$(find "$ROOT" -name '*.sh' -not -path '*/results/*' -exec env LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' {} + 2>/dev/null)
 if [[ -z "$bad_vars" ]]; then ok "переменные перед кириллицей — в \${…}"; else bad "переменные перед кириллицей без \${…}:"; echo "$bad_vars"; fi
+# файл проверки читается сам по себе: вторая строка — шапка «что проверяется и почему»
+no_head=$(for f in "$ROOT"/modules/*/checks/*/*.sh; do sed -n 2p "$f" | grep -q '^# ' || echo "${f#$ROOT/}"; done)
+if [[ -z "$no_head" ]]; then ok "у каждого файла проверки — шапка-комментарий"; else bad "файлы проверок без шапки:"; echo "$no_head"; fi
 if command -v shellcheck >/dev/null 2>&1; then
   echo "▸ shellcheck (ошибки)"
   find "$ROOT" -name '*.sh' -not -path '*/results/*' -print0 | xargs -0 shellcheck -S error -x && ok "shellcheck" || bad "shellcheck"

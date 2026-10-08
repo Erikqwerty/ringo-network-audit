@@ -12,7 +12,7 @@
 #   run.sh [--role server|client|both] [--timeout N] [--updates] [--accounts] [--apps] [--all]
 #          [--add host:port[:tls]] [--no-builtin] [--out папка аудита — подробности проверок для отчёта]
 #
-# Устройство: lib/*.sh — функции и список целей, checks/NN_*.sh — проверки по порядку номеров.
+# Устройство: lib/*.sh — функции и список целей, checks/NN_раздел/NN_проверка.sh — по файлу на проверку.
 # Коды возврата: 0 — всё ок, 1 — есть WARN, 2 — есть FAIL. Совместимо с bash 3.2 (macOS).
 
 set -u
@@ -51,5 +51,7 @@ case "$ROLE" in server|client|both) ;; *) echo "--role: server|client|both"; exi
 detail_init "$OUT_DIR" apple
 . "$MOD_DIR/lib/net.sh"
 . "$MOD_DIR/lib/check.sh"
+. "$MOD_DIR/lib/verdict.sh"
 . "$MOD_DIR/lib/targets.sh"   # строит TARGETS/SEL по флагам выше
-for f in "$MOD_DIR"/checks/[0-9][0-9]_*.sh; do . "$f"; done
+# проверки: разделы и файлы внутри — по порядку номеров; файл без нужных условий сам делает return
+for f in "$MOD_DIR"/checks/[0-9][0-9]_*/[0-9][0-9]_*.sh; do . "$f"; done

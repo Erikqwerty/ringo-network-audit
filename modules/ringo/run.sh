@@ -24,7 +24,7 @@
 # Проверки WAF и DPI неинвазивны: тестовые строки идут в query/теле с заведомо
 # невалидными данными, приложение ничего не создаёт. Запускать только по своей инфраструктуре.
 #
-# Устройство: lib/*.sh — функции, checks/NN_*.sh — проверки, выполняются по порядку номеров.
+# Устройство: lib/*.sh — общие функции, checks/NN_раздел/NN_проверка.sh — по файлу на проверку, по порядку.
 # Коды возврата: 0 — всё ок, 1 — есть WARN, 2 — есть FAIL. Совместимо с bash 3.2 (macOS).
 
 set -u
@@ -86,5 +86,5 @@ trap 'stop_capture; rm -f "$TMP" "$TMP".*; rm -rf "$FPD"' EXIT
 # признаки страницы блокировки WAF (в нижнем регистре)
 BLOCK_RE='support id|incident id|ray id|request rejected|requested url was rejected|access to resource was blocked|access blocked|attention required|request blocked|web application firewall'
 
-endpoints_init
-for f in "$MOD_DIR"/checks/[0-9][0-9]_*.sh; do . "$f"; done
+# проверки: разделы и файлы внутри — по порядку номеров; файл без нужных условий сам делает return
+for f in "$MOD_DIR"/checks/[0-9][0-9]_*/[0-9][0-9]_*.sh; do . "$f"; done
