@@ -8,6 +8,7 @@
 #   run.sh https://mdm.example.com --scep-proxy    # + /scep-proxy
 #   run.sh https://mdm.example.com --no-waf-probe  # не слать тестовые строки с сигнатурами атак
 #   run.sh https://mdm.example.com --dpi           # вмешательство на пути (DPI / ТСПУ)
+#   run.sh https://mdm.example.com --ws-hold 120   # держать websocket агента N секунд: рвёт ли его прокси
 #   run.sh https://mdm.example.com --capture [if]  # захват tcpdump во время проверки (нужен sudo)
 #   run.sh https://mdm.example.com --pcap файл     # разбор готового .pcap
 #   run.sh https://mdm.example.com --out папка     # сохранить ответы сервера и swagger
@@ -33,12 +34,12 @@ MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$MOD_DIR/../.." && pwd)"
 SCHEMA_DIR="$ROOT/schemas"
 
-usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 
 HOST="${1:-}"
 [[ "$HOST" == -* ]] && HOST=""
 INTERNAL=0; CHECK_SCEP_PROXY=0; WAF_PROBE=1; DPI_PROBE=0; CAPTURE=0; CAP_IFACE=""; PCAP_FILE=""
-OUT_DIR=""; COMPARE=""; API_TOKEN="${RINGO_TOKEN:-}"; SWAGGER_FILE=""; SAVE_SCHEMA=1
+OUT_DIR=""; COMPARE=""; API_TOKEN="${RINGO_TOKEN:-}"; SWAGGER_FILE=""; SAVE_SCHEMA=1; WS_HOLD=0
 shift || true
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
     --scep-proxy)   CHECK_SCEP_PROXY=1 ;;
     --no-waf-probe) WAF_PROBE=0 ;;
     --dpi)          DPI_PROBE=1 ;;
+    --ws-hold)      WS_HOLD="${2:-0}"; shift ;;
     --capture)      CAPTURE=1; DPI_PROBE=1
                     [[ "${2:-}" == --* || -z "${2:-}" ]] || { CAP_IFACE="$2"; shift; } ;;
     --pcap)         PCAP_FILE="${2:-}"; shift ;;
@@ -82,7 +84,7 @@ detail_init "$OUT_DIR" ringo
 FLAKY_CNT=0
 SEEN_HAPROXY=0; SEEN_NGINX=0
 TMP="$(mktemp)"; FPD="$(mktemp -d)"
-trap 'stop_capture; rm -f "$TMP" "$TMP".*; rm -rf "$FPD"' EXIT
+trap '[[ -n "${WS_PID:-}" ]] && kill "$WS_PID" 2>/dev/null; stop_capture; rm -f "$TMP" "$TMP".*; rm -rf "$FPD"' EXIT
 # признаки страницы блокировки WAF (в нижнем регистре)
 BLOCK_RE='support id|incident id|ray id|request rejected|requested url was rejected|access to resource was blocked|access blocked|attention required|request blocked|web application firewall'
 

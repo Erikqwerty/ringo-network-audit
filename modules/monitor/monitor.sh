@@ -2,6 +2,8 @@
 # Мониторинг «как mtr»: параллельные пробы целей, таблица в терминале.
 # Подключается через source из audit.sh; сам не запускается.
 
+# Цели: https://… — HTTP(S)-проба; host:port — TCP; ping:host — ICMP;
+#       ws:https://host — websocket агента держится постоянно (lib/ws_hold.py), в журнал — каждый разрыв.
 # ---------- мониторинг (как mtr) ----------
 MON_ROUNDS=${MON_ROUNDS:-0}; MON_STARTED=${MON_STARTED:-}; MON_ENDED=${MON_ENDED:-}
 MON_DIR="${MON_DIR:-$LOGDIR/monitor}"
@@ -10,12 +12,12 @@ NC_G=(); [[ "$(uname -s)" == Darwin ]] && NC_G=(-G "$M_TIMEOUT")
 # одна проба; пишет в $MON_DIR/t<idx>.log строку «раунд|время|статус|мс|подробности»
 # статус: ok — ответ есть; err — ответ есть, но ошибка сервера (5xx); fail — ответа нет
 mon_probe() {
-  local i="$1" tg="$2" rnd="$3" st="ok" ms=0 det="" out rc code tc ta tf tt t0 h p stage
+  local i="$1" tg="$2" rnd="$3" st="ok" ms=0 det="" out rc code tc ta tf tt rip t0 h p stage
   case "$tg" in
     http://*|https://*)
       out=$(curl -skv -o /dev/null -m "$M_TIMEOUT" \
-            -w '\nW %{http_code} %{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total}\n' "$tg" 2>&1); rc=$?
-      read -r _ code tc ta tf tt <<<"$(grep '^W ' <<<"$out" | tail -1)"
+            -w '\nW %{http_code} %{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total} %{remote_ip}\n' "$tg" 2>&1); rc=$?
+      read -r _ code tc ta tf tt rip <<<"$(grep '^W ' <<<"$out" | tail -1)"
       ms=$(awk -v x="${tt:-0}" 'BEGIN{printf "%d", x*1000}')
       if [[ "${code:-000}" == "000" ]]; then
         st="fail"; stage="tcp"
@@ -33,7 +35,8 @@ mon_probe() {
           *)      det="нет ответа (curl rc=$rc)" ;;
         esac
       else
-        det="HTTP $code · TCP $(awk -v x="$tc" 'BEGIN{printf "%d", x*1000}') · TLS $(awk -v x="$ta" 'BEGIN{printf "%d", x*1000}') · 1-й байт $(awk -v x="$tf" 'BEGIN{printf "%d", x*1000}') мс"
+        # IP ответившего узла: за DNS round-robin видно, какой узел даёт ошибки
+        det="HTTP $code${rip:+ · $rip} · TCP $(awk -v x="$tc" 'BEGIN{printf "%d", x*1000}') · TLS $(awk -v x="$ta" 'BEGIN{printf "%d", x*1000}') · 1-й байт $(awk -v x="$tf" 'BEGIN{printf "%d", x*1000}') мс"
         [[ "$code" =~ ^5 ]] && st="err"
       fi ;;
     ping:*)
@@ -111,9 +114,9 @@ if (( DO_MON )) && [[ -z "$REBUILD" ]]; then
     if [[ -n "$RINGO_URL" ]]; then
       u="${RINGO_URL%/}"
       MON_T+=("$u/" "$u/scep?operation=GetCACaps" "$u/agent/manifest" "$u/socket.io/?EIO=4&transport=polling"
-              "$(host_of "$u"):443" "ping:$(host_of "$u")")
+              "ws:$u" "$(host_of "$u"):443" "ping:$(host_of "$u")")
     fi
-    MON_T+=("courier.push.apple.com:5223" "api.push.apple.com:443" "albert.apple.com:443" "identity.apple.com:443")
+    (( ${WATCH:-0} )) || MON_T+=("courier.push.apple.com:5223" "api.push.apple.com:443" "albert.apple.com:443" "identity.apple.com:443")
   fi
   mkdir -p "$MON_DIR"; rm -f "$MON_DIR"/t*.log "$MON_DIR/stop"
   MON_STARTED="$(date '+%Y-%m-%d %H:%M:%S')"; MON_STOP=0; t_begin=$SECONDS
@@ -121,7 +124,15 @@ if (( DO_MON )) && [[ -z "$REBUILD" ]]; then
   # У каждой цели свой цикл (как в mtr): медленная или недоступная цель не задерживает остальные.
   # Фоновые процессы неинтерактивного bash игнорируют Ctrl-C — останавливаем их файлом-флагом.
   mon_worker() { # индекс, цель
-    local k=0 t0 rest
+    local k=0 t0 rest u hp py
+    # websocket держится постоянно: строки в лог пишет сам ws_hold.py (раз в интервал и при каждом разрыве)
+    if [[ "$2" == ws:* ]]; then
+      u="${2#ws:}"; hp="${u#*://}"; hp="${hp%%/*}"; py="$(safe_python)"
+      if [[ -z "$py" ]]; then printf '1|%s|fail|0|нужен python3\n' "$(date +%H:%M:%S)" >>"$MON_DIR/t$1.log"; return; fi
+      [[ "$hp" == *:* ]] || hp="$hp:443"
+      "$py" "$ROOT/modules/ringo/lib/ws_hold.py" "${hp%:*}" "${hp%:*}" "${hp##*:}" auto 0 --mon "$MON_DIR/t$1.log" "$M_INTERVAL" "$MON_DIR/stop" 2>/dev/null
+      return
+    fi
     while [[ ! -f "$MON_DIR/stop" ]]; do
       ((k++)); t0=$(now_ms)
       mon_probe "$1" "$2" "$k"
@@ -156,6 +167,7 @@ if (( DO_MON )) && [[ -z "$REBUILD" ]]; then
     last_drawn=$MON_ROUNDS
     alive=0; for p in "${W_PIDS[@]}"; do kill -0 "$p" 2>/dev/null && alive=1; done
     (( alive )) || break                                   # все цели сделали --count проб
+    (( M_COUNT > 0 && MON_ROUNDS >= M_COUNT )) && break    # websocket сам не останавливается — по счёту раундов
     (( M_DURATION > 0 && SECONDS - t_begin >= M_DURATION )) && break
   done
   : >"$MON_DIR/stop"

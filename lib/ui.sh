@@ -29,12 +29,29 @@ badge() {
     FAIL) printf '%s[FAIL]%s' "$R" "$N" ;;
   esac
 }
+# что делать при WARN/FAIL: первое правило lib/remedies.tsv, чьё регулярное выражение совпало с подписью
+REMEDY_FILE="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib/remedies.tsv"
+remedy_of() { # подпись -> действие или ничего
+  local re fix
+  [[ -n "${1:-}" && -f "$REMEDY_FILE" ]] || return 0
+  while IFS=$'\t' read -r re fix; do
+    [[ -z "$re" || "$re" == \#* || -z "$fix" ]] && continue
+    if [[ "$1" =~ $re ]]; then printf '%s' "$fix"; return 0; fi
+  done <"$REMEDY_FILE"
+}
+# действие — первой строкой в подробности открытой проверки (DET из lib/detail.sh), чтобы его было видно сразу
+det_remedy() { # подпись
+  local fix; [[ -n "${DET:-}" && -f "${DET:-}" ]] || return 0
+  fix="$(remedy_of "$1")"; [[ -n "$fix" ]] || return 0
+  grep -q '^= Что делать: ' "$DET" && return 0
+  { head -1 "$DET"; printf '= Что делать: %s\n' "$fix"; tail -n +2 "$DET"; } >"$DET.r" && mv "$DET.r" "$DET"
+}
 # count СТАТУС [подпись для итога] — подписанные WARN/FAIL перечисляются в конце модуля
 count() {
   case "$1" in
     OK) ((OK_CNT++));; INFO) ((INFO_CNT++));;
-    WARN) ((WARN_CNT++)); [[ -n "${2:-}" ]] && WARN_LIST+=("$2");;
-    FAIL) ((FAIL_CNT++)); [[ -n "${2:-}" ]] && FAIL_LIST+=("$2");;
+    WARN) ((WARN_CNT++)); [[ -n "${2:-}" ]] && { WARN_LIST+=("$2"); det_remedy "$2"; };;
+    FAIL) ((FAIL_CNT++)); [[ -n "${2:-}" ]] && { FAIL_LIST+=("$2"); det_remedy "$2"; };;
   esac
   return 0
 }

@@ -25,3 +25,29 @@ safe_python() {
   [[ "$py" == /usr/bin/python3 ]] && ! xcode-select -p >/dev/null 2>&1 && py=""
   printf '%s' "$py"
 }
+
+# сдвиг часов этого компьютера относительно NTP-сервера, в секундах («+1.25» — наши часы отстают).
+# python3 (UDP 123 напрямую, до трёх попыток), иначе sntp. Код: 0 — есть ответ, 1 — нет ответа, 9 — нечем проверить.
+ntp_offset() { # хост
+  local py out; py="$(safe_python)"
+  if [[ -n "$py" ]]; then
+    out=$("$py" - "$1" <<'PY' 2>/dev/null
+import socket, struct, sys, time
+# UDP теряется: разовая потеря — ещё не «NTP закрыт», поэтому три попытки
+for _ in range(3):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)
+    try:
+        t0 = time.time(); s.sendto(b'\x1b' + 47 * b'\0', (sys.argv[1], 123)); d, _ = s.recvfrom(512); t1 = time.time()
+        w = struct.unpack('!12I', d[:48])
+        print("%+.2f" % (w[10] - 2208988800 + w[11] / 2**32 - (t0 + t1) / 2)); sys.exit(0)
+    except (OSError, struct.error):
+        pass
+sys.exit(1)
+PY
+) || return 1
+  elif have sntp; then
+    out=$(with_timeout 6 sntp -t 3 "$1" 2>/dev/null | awk 'NR==1 && $1 ~ /^[+-]?[0-9.]+$/ {print $1}')
+    [[ -n "$out" ]] || return 1
+  else return 9; fi
+  printf '%s' "$out"
+}

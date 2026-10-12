@@ -20,3 +20,6 @@ schemas/swagger_*.json
 
 # личные настройки Claude Code (разрешения и т. п.)
 .claude/settings.local.json
+
+# сборка одним файлом (tools/bundle.sh)
+dist/

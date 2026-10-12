@@ -22,7 +22,7 @@ render_module() { # лог, префикс
       if (hdr && match(l, /^[A-Za-z0-9-]+: /)) { k = substr(l, 1, RLENGTH - 2); return "<span class=\"hk\">" esc(k) "</span>: " esc(substr(l, RLENGTH + 1)) }
       return esc(l)
     }
-    function det_html(f,   l, title, hdr, n) {
+    function det_html(f,   l, title, hdr, n, k) {
       d_out = ""; d_kv = ""; d_pre = ""; d_sec = 0; title = ""; hdr = 0; n = 0
       while ((getline l < f) > 0) {
         n++
@@ -35,7 +35,8 @@ render_module() { # лог, префикс
         if (l ~ /^\$ /) { d_flush(); d_out = d_out "<div class=\"dcmd\"><code>" esc(substr(l, 3)) "</code><button type=\"button\" class=\"dcopy\" title=\"Копировать команду\" aria-label=\"Копировать команду\"></button></div>"; continue }
         if (match(l, /^= [^:]+: /)) {
           if (d_pre != "") d_flush()
-          d_kv = d_kv "<div><dt>" esc(substr(l, 3, RLENGTH - 4)) "</dt><dd>" esc(substr(l, RLENGTH + 1)) "</dd></div>"; continue
+          k = substr(l, 3, RLENGTH - 4)   # «Что делать» (lib/remedies.tsv) выделяется в окне
+          d_kv = d_kv "<div" (k == "Что делать" ? " class=\"dfix\"" : "") "><dt>" esc(k) "</dt><dd>" esc(substr(l, RLENGTH + 1)) "</dd></div>"; continue
         }
         if (d_kv != "") d_flush()
         d_pre = d_pre d_line(l, hdr) "\n"
@@ -281,7 +282,7 @@ HTML
       IFS='|' read -r nums lst det sp <<<"$(awk -v W=40 "$MON_STATS_AWK" "$MON_DIR/t$i.log")"
       read -r n f e loss last avg best worst jit <<<"$nums"
       avail=$(awk -v l="$loss" 'BEGIN{printf "%.1f", 100-l}')
-      case "$tg" in http*) typ=HTTP ;; ping:*) typ=ICMP ;; *) typ=TCP ;; esac
+      case "$tg" in http*) typ=HTTP ;; ws:*) typ=WS ;; ping:*) typ=ICMP ;; *) typ=TCP ;; esac
       mcls=ok; [[ "$loss" != "0.0" || "$e" != "0" ]] && mcls=warn; [[ "$f" == "$n" ]] && mcls=fail
       printf '<div class="mcard %s"><div class="mhead"><div class="mname"><span class="type">%s</span>%s</div><div class="avail">%s%%<small>доступность</small></div></div>\n' \
         "$mcls" "$typ" "$(html_esc <<<"$tg")" "$avail"
@@ -302,7 +303,7 @@ HTML
       local t rnd st dt
       while IFS='|' read -r t rnd tg st dt; do
         printf '<tr class="%s"><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td></tr>\n' \
-          "$([[ $st == fail ]] && echo fail || echo warn)" "$t" "$((10#$rnd))" "$(html_esc <<<"$tg")" "$([[ $st == fail ]] && echo "нет ответа" || echo "ошибка 5xx")" "$(html_esc <<<"$dt")"
+          "$([[ $st == fail ]] && echo fail || echo warn)" "$t" "$((10#$rnd))" "$(html_esc <<<"$tg")" "$([[ $st == err ]] && echo "ошибка 5xx" || { [[ $tg == ws:* ]] && echo "разрыв" || echo "нет ответа"; })" "$(html_esc <<<"$dt")"
       done <<<"$ev"
       printf '</tbody></table></div></details>\n'
     else

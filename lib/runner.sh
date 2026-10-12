@@ -29,6 +29,7 @@ run_ringo() {
   (( R_SCEPPROXY )) && args+=(--scep-proxy)
   (( R_WAF ))       || args+=(--no-waf-probe)
   (( R_DPI ))       && args+=(--dpi)
+  (( ${R_WSHOLD:-0} > 0 )) && args+=(--ws-hold "$R_WSHOLD")
   [[ -n "$R_CAPTURE" ]] && args+=(--capture "$R_CAPTURE" --pcap "$LOGDIR/ringo_capture.pcap")
   [[ -n "$R_COMPARE" ]] && args+=(--compare "$R_COMPARE")
   args+=(--out "$LOGDIR")   # ответы сервера и swagger — в папку запуска

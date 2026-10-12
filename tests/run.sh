@@ -14,6 +14,13 @@ while IFS= read -r f; do
   if bash -n "$f" 2>/dev/null; then ((PASS++)); else bad "bash -n ${f#$ROOT/}"; bash -n "$f"; fi
 done < <(find "$ROOT" -name '*.sh' -not -path '*/results/*')
 echo "  проверено файлов: $PASS"
+# python-помощники (mss_probe.py, ws_hold.py) — синтаксис без запуска
+py="$(command -v python3 || true)"
+if [[ -n "$py" ]]; then
+  for f in "$ROOT"/modules/*/lib/*.py; do
+    if "$py" -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$f" 2>/dev/null; then ok "python: ${f#$ROOT/}"; else bad "python: ${f#$ROOT/}"; fi
+  done
+fi
 # bash 3.2 склеивает байты UTF-8 с именем переменной, если «»/кириллица идут вплотную к ней → unbound variable.
 bad_vars=$(find "$ROOT" -name '*.sh' -not -path '*/results/*' -exec env LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' {} + 2>/dev/null)
 if [[ -z "$bad_vars" ]]; then ok "переменные перед кириллицей — в \${…}"; else bad "переменные перед кириллицей без \${…}:"; echo "$bad_vars"; fi
@@ -31,6 +38,25 @@ echo "▸ lib/ui.sh"
   count OK; count WARN "w1"; count FAIL "f1"; count FAIL
   [[ "$OK_CNT $WARN_CNT $FAIL_CNT ${#FAIL_LIST[@]} ${WARN_LIST[0]}" == "1 1 2 1 w1" ]]
 ) && ok "count: счётчики и подписи" || bad "count: счётчики и подписи"
+
+echo "▸ lib/ui.sh + lib/remedies.tsv: что делать"
+(
+  OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
+  ROOT="$ROOT"; . "$ROOT/lib/ui.sh"; . "$ROOT/lib/detail.sh"
+  check "remedy_of: неполная цепочка → fullchain" '[[ "$(remedy_of "неполная цепочка сертификатов (нет «R3»)")" == *fullchain* ]]'
+  check "remedy_of: эндпоинт по вердикту" '[[ "$(remedy_of "PUT /mdm/checkin — 404 как на несуществующем пути — проверьте маршрут на прокси")" == *location* ]]'
+  check "remedy_of: websocket рвётся → proxy_read_timeout" '[[ "$(remedy_of "websocket агента рвётся через 30 с — таймаут прокси или балансировщика")" == *proxy_read_timeout* ]]'
+  check "remedy_of: чёрная дыра MTU → MSS clamping" '[[ "$(remedy_of "чёрная дыра MTU: приём от сервера встаёт, с MSS 1300 проходит")" == *clamp* ]]'
+  check "remedy_of: Apple APNs" '[[ "$(remedy_of "Push на устройства: APNs недоступен (5223 и 443) — устройства не получат MDM-команды")" == *5223* ]]'
+  check "remedy_of: без правила — пусто" '[[ -z "$(remedy_of "закрыт снаружи (рекомендация соблюдена)")" ]]'
+  bad_re=$(awk -F'\t' '!/^#/ && NF && NF != 2 {print NR": "$0}' "$ROOT/lib/remedies.tsv")
+  check "remedies.tsv: в каждой строке правило и действие через TAB" '[[ -z "$bad_re" ]]'
+  TTY_OUT=0; detail_init "$OUT" ringo
+  det_new "Проверка"; det_kv "Как проверяется" "x"; count FAIL "неполная цепочка сертификатов (нет «R3»)"; count FAIL "неполная цепочка сертификатов (нет «R3»)"
+  check "count FAIL: «Что делать» — второй строкой подробностей, один раз" \
+    '[[ "$(sed -n 2p "$DET")" == "= Что делать: "*fullchain* && $(grep -c "^= Что делать" "$DET") == 1 ]]'
+  exit "$FAILS"
+); r=$?; FAILS=$((FAILS + r))
 
 echo "▸ lib/util.sh: числа не зависят от локали"
 if locale -a 2>/dev/null | grep -qi '^ru_RU.UTF-8$'; then
@@ -121,6 +147,22 @@ echo "▸ report/build.sh (отчёт из фикстуры)"
   lines=$(grep -cE '^ *\[( OK |INFO|WARN|FAIL)\]' "$FIX/ringo_sample.txt")
   [[ -s "$REPORT" && "$rows" == "$lines" ]] && grep -q '</html>' "$REPORT" && grep -q -- '--accent' "$REPORT"
 ) && ok "каждая строка проверки → строка отчёта, стили встроены" || bad "build_report"
+
+echo "▸ report/diff.sh (сравнение двух запусков из фикстуры)"
+(
+  OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
+  . "$ROOT/lib/ui.sh"; . "$ROOT/lib/util.sh"; . "$ROOT/report/build.sh"; . "$ROOT/report/diff.sh"
+  mkdir -p "$OUT/a" "$OUT/b"
+  cp "$FIX/ringo_sample.txt" "$OUT/a/ringo.txt"
+  # B: одна проверка стала FAIL, IP в названии раздела другой — раздел всё равно тот же
+  perl -pe '$d ||= s/\[ OK \] GET  \/scep/[FAIL] GET  \/scep/; s/^( ▸ Вмешательство на пути.*— )[0-9.]+:443/${1}10.0.0.1:443/' \
+    "$FIX/ringo_sample.txt" >"$OUT/b/ringo.txt"
+  for x in a b; do printf 'Ringo MDM: эндпоинты|%s|0|0 0 0 0|\n' "$OUT/$x/ringo.txt" >"$OUT/$x/results.txt"; done
+  res=$(build_diff "$OUT/a" "$OUT/b" "$OUT/diff.html")
+  check "diff_rows: эндпоинт — ключ «МЕТОД путь»" 'diff_rows "$FIX/ringo_sample.txt" | grep -q "|GET /scep?operation=GetCACaps|OK|"'
+  check "build_diff: одно различие, ухудшение помечено" '[[ "$res" == *": 1" ]] && grep -q "<tr class=\"worse\">" "$OUT/diff.html" && grep -q "</html>" "$OUT/diff.html"'
+  exit "$FAILS"
+); r=$?; FAILS=$((FAILS + r))
 
 echo
 echo "Пройдено: $PASS, ошибок: $FAILS"

@@ -28,6 +28,9 @@
   });
 
   // «Главное»: все FAIL и WARN со ссылками на строку
+  function fixOf(r){ var t=$('template.det',r); if(!t) return '';
+    var dt=$$('dt',t.content).filter(function(d){ return d.textContent==='Что делать'; })[0];
+    return dt&&dt.nextElementSibling?dt.nextElementSibling.textContent:''; }
   var box=$('#findings');
   if(box){
     var items=$$('.row.fail').concat($$('.row.warn'));
@@ -39,6 +42,8 @@
       var ft=$('.ft',a);
       if(r.dataset.t){ var c=document.createElement('code'); c.textContent=r.dataset.t; ft.appendChild(c); }
       ft.appendChild(document.createTextNode(msg?msg.textContent:r.textContent));
+      // «что делать» — из подробностей проверки (lib/remedies.tsv)
+      var fx=fixOf(r); if(fx){ var e=document.createElement('span'); e.className='fx'; e.textContent='Что делать: '+fx; ft.appendChild(e); }
       $('.fm',a).textContent=mod?mod.dataset.name:'';
       a.addEventListener('click',function(e){ var d=r.closest('details'); if(d) d.open=true;
         if($('template.det',r)){ e.preventDefault(); openDet(r); } });

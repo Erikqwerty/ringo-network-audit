@@ -9,18 +9,26 @@
 #   ./audit.sh --full https://mdm.example.com [--internal] [--capture IFACE] [--duration S]
 #                      полный аудит: Ringo со всеми проверками + Apple (все хосты, обе роли) + мониторинг (60 с)
 #   ./audit.sh --ringo https://mdm.example.com [--internal] [--scep-proxy] [--no-waf-probe] [--dpi] [--capture IFACE]
+#                      [--ws-hold S]   (держать websocket агента S секунд: не рвёт ли его прокси; в --full — 120 с)
 #                      [--compare results/<домен>_<дата>_<время>]   (сравнить с прошлым аудитом, например эталонного сервера)
+#   ./audit.sh --watch https://mdm.example.com [--interval S] [--duration S]
+#                      наблюдение за Ringo до Ctrl-C: ключевые эндпоинты, websocket агента держится постоянно,
+#                      в журнал — каждый разрыв, код ответа и IP узла (ловит плавающие проблемы)
 #     точная версия Ringo: RINGO_TOKEN=<JWT> ./audit.sh --ringo …  (токен не попадает в логи и отчёт)
 #   ./audit.sh --apple [--role server|client|both] [--timeout N] [--apple-extra "--updates --apps"]
 #   ./audit.sh --monitor [--target URL|host:port|ping:host]... [--interval S] [--count N | --duration S]
 #   Модули сочетаются: --ringo URL --apple --monitor
 #   Общие: --report путь/файл.html (логи — в ту же папку)  --no-open  --menu (меню вместе с флагами)  -h|--help
+#          --archive (упаковать папку результата в .tar.gz — чтобы переслать)
 #   Пересобрать отчёт из логов прошлого запуска (без повторных проверок): --rebuild results/<домен>_<дата>_<время>
+#   Сравнить два запуска — только различия (изнутри / снаружи, до / после правки): --diff results/A results/B
+#                      пишет diff.html в папку B (или в --report)
 #
 # Цели мониторинга:
 #   https://host/путь   — HTTP(S): код, TCP/TLS/первый байт/итог, этап обрыва
 #   host:port           — TCP-подключение (время установления)
 #   ping:host           — ICMP (может быть закрыт файрволом — это не ошибка сервиса)
+#   ws:https://host     — websocket агента держится постоянно, в журнал — каждый разрыв (нужен python3)
 # Если цели не заданы, берутся ключевые эндпоинты Ringo (при --ringo) и хосты Apple (APNs, активация).
 #
 # Коды возврата: 0 — всё ок, 1 — есть WARN, 2 — есть FAIL (по худшему модулю).
@@ -34,12 +42,12 @@ FULL_MON_SECONDS=60   # мониторинг в полном аудите, ес�
 
 # ---------- параметры ----------
 DO_RINGO=0; DO_APPLE=0; DO_MON=0; FULL=0
-RINGO_URL=""; R_INTERNAL=0; R_SCEPPROXY=0; R_WAF=1; R_DPI=0; R_CAPTURE=""; R_COMPARE=""
+RINGO_URL=""; R_INTERNAL=0; R_SCEPPROXY=0; R_WAF=1; R_DPI=0; R_CAPTURE=""; R_COMPARE=""; R_WSHOLD=""
 A_ROLE="both"; A_TIMEOUT=4; A_EXTRA=""
-M_TARGETS=(); M_INTERVAL=2; M_COUNT=0; M_DURATION=0; M_TIMEOUT=5
-REPORT=""; OPEN_REPORT=1; INTERACTIVE=1; FORCE_MENU=0; REBUILD=""; RUN_DUR=""
+M_TARGETS=(); M_INTERVAL=""; M_COUNT=0; M_DURATION=0; M_TIMEOUT=5; WATCH=0
+REPORT=""; OPEN_REPORT=1; INTERACTIVE=1; FORCE_MENU=0; REBUILD=""; RUN_DUR=""; ARCHIVE=0; DIFF_A=""; DIFF_B=""
 
-usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   INTERACTIVE=0
@@ -52,20 +60,24 @@ while [[ $# -gt 0 ]]; do
     --dpi)          R_DPI=1 ;;
     --capture)      R_CAPTURE="${2:-}"; shift ;;
     --compare)      R_COMPARE="${2:-}"; shift ;;
+    --ws-hold)      R_WSHOLD="${2:-0}"; shift ;;
+    --watch)        WATCH=1; DO_MON=1; RINGO_URL="${2:-}"; shift ;;
     --apple)        DO_APPLE=1 ;;
     --role)         A_ROLE="${2:-both}"; shift ;;
     --timeout)      A_TIMEOUT="${2:-4}"; shift ;;
     --apple-extra)  A_EXTRA="${2:-}"; shift ;;
     --monitor)      DO_MON=1 ;;
     --target)       M_TARGETS+=("${2:-}"); shift ;;
-    --interval)     M_INTERVAL="${2:-2}"; shift ;;
+    --interval)     M_INTERVAL="${2:-}"; shift ;;
     --count)        M_COUNT="${2:-0}"; shift ;;
     --duration)     M_DURATION="${2:-0}"; shift ;;
     --probe-timeout) M_TIMEOUT="${2:-5}"; shift ;;
     --report)       REPORT="${2:-}"; shift ;;
     --no-open)      OPEN_REPORT=0 ;;
+    --archive)      ARCHIVE=1 ;;
     --menu)         FORCE_MENU=1 ;;
     --rebuild)      REBUILD="${2:-}"; shift ;;
+    --diff)         DIFF_A="${2:-}"; DIFF_B="${3:-}"; shift 2 ;;
     -h|--help)      usage; exit 0 ;;
     *) echo "Неизвестный параметр: $1"; usage; exit 1 ;;
   esac
@@ -80,11 +92,15 @@ apply_full() {
   R_SCEPPROXY=1; R_DPI=1; R_WAF=1
   DO_APPLE=1; A_ROLE=both
   [[ " $A_EXTRA " == *" --all "* ]] || A_EXTRA="$A_EXTRA --all"
+  [[ -n "$R_WSHOLD" ]] || R_WSHOLD=120
   DO_MON=1
   (( M_DURATION == 0 && M_COUNT == 0 )) && M_DURATION=$FULL_MON_SECONDS
   return 0
 }
 (( FULL )) && apply_full
+# наблюдение: только мониторинг, но с целями Ringo (в т. ч. websocket) и реже — оно идёт часами
+(( WATCH )) && [[ -z "$M_INTERVAL" ]] && M_INTERVAL=10
+[[ -n "$M_INTERVAL" ]] || M_INTERVAL=2
 
 # shellcheck source=lib/ui.sh
 . "$ROOT/lib/ui.sh"
@@ -93,6 +109,21 @@ apply_full() {
 . "$ROOT/lib/menu.sh"
 . "$ROOT/lib/runner.sh"
 . "$ROOT/report/build.sh"
+. "$ROOT/report/diff.sh"
+
+# --diff: только сравнить два готовых запуска
+if [[ -n "$DIFF_A" ]]; then
+  for x in "$DIFF_A" "$DIFF_B"; do
+    [[ -f "$x/results.txt" ]] || { echo "--diff: в «${x}» нет results.txt (это не папка запуска мастера)"; exit 1; }
+  done
+  DIFF_OUT="${REPORT:-$DIFF_B/diff.html}"
+  build_diff "$(cd "$DIFF_A" && pwd)" "$(cd "$DIFF_B" && pwd)" "$DIFF_OUT" || exit 1
+  echo "${BD}Сравнение:${N} $DIFF_OUT"
+  if (( OPEN_REPORT )) && [[ -t 1 ]]; then
+    if have open; then open "$DIFF_OUT" 2>/dev/null; elif have xdg-open; then xdg-open "$DIFF_OUT" >/dev/null 2>&1; fi
+  fi
+  exit 0
+fi
 
 # --rebuild: только пересобрать report.html из сохранённых логов прошлого запуска
 RESULTS=()
@@ -121,8 +152,8 @@ fi
 if [[ -z "$REBUILD" ]] && (( !DO_RINGO && !DO_APPLE && !DO_MON )); then
   echo "Ничего не выбрано. Запустите без аргументов для меню или см. --help"; exit 1
 fi
-if (( DO_RINGO )) && [[ ! "$RINGO_URL" =~ ^https?:// ]]; then
-  echo "--ringo: нужен URL вида https://host"; exit 1
+if (( DO_RINGO || WATCH )) && [[ ! "$RINGO_URL" =~ ^https?:// ]]; then
+  echo "--ringo / --watch: нужен URL вида https://host"; exit 1
 fi
 case "$A_ROLE" in server|client|both) ;; *) echo "--role: server|client|both"; exit 1 ;; esac
 
@@ -134,8 +165,9 @@ elif [[ -n "$REPORT" ]]; then
   [[ "$REPORT" == */* ]] || REPORT="$PWD/$REPORT"
   LOGDIR="$(dirname "$REPORT")"
 else
-  # папка — по домену, чтобы аудиты разных серверов было видно сразу: results/<домен>_<дата>_<время>
-  LOGDIR="$ROOT/results/$( [[ -n "$RINGO_URL" ]] && host_of "$RINGO_URL" || echo apple )_$STAMP"
+  # папка — по домену, чтобы аудиты разных серверов было видно сразу: results/<домен>_<дата>_<время>.
+  # AUDIT_RESULTS / AUDIT_PREFIX задаёт сборка одним файлом (tools/bundle.sh): результат — в папку клиента
+  LOGDIR="${AUDIT_RESULTS:-$ROOT/results}/${AUDIT_PREFIX:-}$( [[ -n "$RINGO_URL" ]] && host_of "$RINGO_URL" || echo apple )_$STAMP"
   REPORT="$LOGDIR/report.html"
 fi
 mkdir -p "$LOGDIR" || { echo "Не удалось создать $LOGDIR"; exit 1; }
@@ -149,6 +181,12 @@ mkdir -p "$LOGDIR" || { echo "Не удалось создать $LOGDIR"; exit 
 build_report; RC=$?
 echo "${BD}Отчёт:${N} $REPORT"
 echo "${D}Папка: $LOGDIR${N}"
+if (( ARCHIVE )); then
+  # папка целиком: отчёт, логи, подробности, ответы сервера — всё, что нужно для разбора без повторного запуска
+  if COPYFILE_DISABLE=1 tar -czf "$LOGDIR.tar.gz" -C "$(dirname "$LOGDIR")" "$(basename "$LOGDIR")" 2>/dev/null; then
+    echo "${BD}Архив для отправки:${N} $LOGDIR.tar.gz"
+  else echo "${Y}Не удалось упаковать $LOGDIR${N}"; fi
+fi
 if (( OPEN_REPORT )) && [[ -t 1 ]]; then
   if have open; then open "$REPORT" 2>/dev/null; elif have xdg-open; then xdg-open "$REPORT" >/dev/null 2>&1; fi
 fi

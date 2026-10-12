@@ -27,7 +27,7 @@ for row in "${SEL[@]}"; do
   det_new "$host:$port"; det_kv "Назначение" "$desc"; det_kv "Обязателен" "$([[ "$req" == 1 ]] && echo "да — недоступность = FAIL" || echo "желателен — недоступность = WARN")"
   check_target "$host" "$port" "$tls" "$req" "$cust"
   clear_line
-  count "$ST"
+  count "$ST" "$host:$port — $MSG"
   [[ "$ST" == "OK" ]] && res_set "$host" "$port" ok || res_set "$host" "$port" bad
   [[ "$grp" == "$GCERT" && "$ST" == "FAIL" ]] && ((CERT_FAIL++))
   printf "   %s %-38s %s%-15s%s %s%s%s\n" "$(badge "$ST")" "$host:$port" "$D" "$IPSHOW" "$N" "$D" "$MSG" "$N"

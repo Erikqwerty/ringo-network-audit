@@ -42,6 +42,7 @@ interactive_menu() {
     yesno "Проверять /scep-proxy?" n && R_SCEPPROXY=1
     yesno "Пробы WAF тестовыми строками?" y || R_WAF=0
     yesno "Проверка вмешательства на пути (DPI / ТСПУ)?" n && R_DPI=1
+    if yesno "Держать websocket агента 2 минуты (не рвёт ли его прокси)?" n; then R_WSHOLD=120; fi
     if yesno "Захват tcpdump во время проверки (нужен sudo)?" n; then
       R_DPI=1
       def_if=$(route -n get "$(host_of "$RINGO_URL")" 2>/dev/null | awk '/interface:/{print $2}')
@@ -63,7 +64,7 @@ interactive_menu() {
     echo "   цели: https://host/путь · host:port · ping:host; пусто — ключевые эндпоинты по умолчанию"
     ask "Свои цели через пробел" ""
     for x in $REPLY; do M_TARGETS+=("$x"); done
-    ask "Интервал между раундами, с" "2"; M_INTERVAL="$REPLY"
+    ask "Интервал между раундами, с" "${M_INTERVAL:-2}"; M_INTERVAL="$REPLY"
     ask "Сколько раундов (0 — до Ctrl-C)" "0"; M_COUNT="$REPLY"
   fi
   echo
